@@ -1,0 +1,76 @@
+# supabase/config/kong.yml
+_format_version: "2.1"
+_transform: true
+
+services:
+  - name: auth-service
+    url: http://auth:9999
+    routes:
+      - name: auth-route
+        paths:
+          - /auth
+        strip_path: true
+    plugins:
+      - name: cors
+
+  - name: rest-service
+    url: http://rest:3000
+    routes:
+      - name: rest-route
+        paths:
+          - /rest/v1
+        strip_path: true
+    plugins:
+      - name: cors
+
+  - name: realtime-service
+    url: http://realtime:4000
+    routes:
+      - name: realtime-route
+        paths:
+          - /realtime/v1
+        strip_path: true
+    plugins:
+      - name: cors
+
+  - name: storage-service
+    url: http://storage:5000
+    routes:
+      - name: storage-route
+        paths:
+          - /storage/v1
+        strip_path: true
+    plugins:
+      - name: cors
+
+  - name: meta-service
+    url: http://meta:8080
+    routes:
+      - name: meta-route
+        paths:
+          - /pg
+        strip_path: true
+    plugins:
+      - name: cors
+
+plugins:
+  - name: cors
+    config:
+      origins:
+        - "*"
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      headers:
+        - Accept
+        - Authorization
+        - Content-Type
+        - Origin
+        - X-Client-Info
+        - apikey
+      credentials: true
+      max_age: 3600

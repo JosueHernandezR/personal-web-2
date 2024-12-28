@@ -1,32 +1,164 @@
+name: supabase
+
 services:
   db:
     image: supabase/postgres:15.1.0.117
     container_name: supabase-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: postgres
     volumes:
       - ./../../supabase/migrations:/docker-entrypoint-initdb.d
-      - type: bind
-        source: ../../supabase/config/postgresql.conf
-        target: /etc/postgresql/postgresql.conf
-      - type: bind
-        source: ../../supabase/config/pg_hba.conf
-        target: /etc/postgresql/pg_hba.conf
+      - ./../../supabase/config/postgresql.conf:/etc/postgresql/postgresql.conf
+      - ./../../supabase/config/pg_hba.conf:/etc/postgresql/pg_hba.conf
       - db-data:/var/lib/postgresql/data
-    command: 
+    command:
       - "postgres"
       - "-c"
       - "config_file=/etc/postgresql/postgresql.conf"
     ports:
       - "5432:5432"
+    networks:
+      - supabase_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:20241202-71e5240
+    restart: unless-stopped
+    ports:
+      - "3010:3000"
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: ${API_EXTERNAL_URL}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+    networks:
+      - supabase_network
+    depends_on:
+      db:
+        condition: service_healthy
+
+  kong:
+    container_name: supabase-kong
+    image: kong:2.8.1
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "8443:8443"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl
+    volumes:
+      - ./../../supabase/config/kong.yml:/kong.yml:ro
+    networks:
+      - supabase_network
+
+  auth:
+    container_name: supabase-auth
+    image: supabase/gotrue:v2.164.0
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_HOST: db
+      GOTRUE_DB_PORT: 5432
+      GOTRUE_DB_NAME: postgres
+      GOTRUE_DB_USER: ${POSTGRES_USER}
+      GOTRUE_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY}
+      GOTRUE_SITE_URL: ${SITE_URL}
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL}
+    networks:
+      - supabase_network
+
+  rest:
+    container_name: supabase-rest
+    image: postgrest/postgrest:v12.2.0
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/postgres
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS:-public,storage}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    networks:
+      - supabase_network
+
+  realtime:
+    container_name: realtime-dev.supabase-realtime
+    image: supabase/realtime:v2.33.70
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: postgres
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      REPLICATION_MODE: RLS
+      SECURE_CHANNELS: "true"
+    networks:
+      - supabase_network
+
+  storage:
+    container_name: supabase-storage
+    image: supabase/storage-api:v1.11.13
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_started
+    restart: unless-stopped
+    environment:
+      ANON_KEY: ${SUPABASE_ANON_KEY}
+      SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/postgres
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+    volumes:
+      - storage-data:/var/lib/storage
+    networks:
+      - supabase_network
+
+  meta:
+    container_name: supabase-meta
+    image: supabase/postgres-meta:v0.84.2
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: ${POSTGRES_USER}
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
     networks:
       - supabase_network
 
@@ -37,3 +169,5 @@ networks:
 volumes:
   db-data:
     name: supabase-db-data
+  storage-data:
+    name: supabase-storage-data
